@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import router as auth_router
+from .transactions import router as transactions_router
 
 app = FastAPI(
     title="Finance Tracker & Budgeting App API",
@@ -17,8 +18,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register authentication routes
+# Register authentication and transaction routes
 app.include_router(auth_router)
+app.include_router(transactions_router)
 
 @app.get("/", summary="Health Check", tags=["Misc"])
 def health_check():
