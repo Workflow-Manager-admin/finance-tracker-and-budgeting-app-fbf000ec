@@ -1,0 +1,327 @@
+openapi: 3.0.3
+info:
+  title: Finance Tracker & Budgeting App API
+  version: 1.0.0
+  description: |
+    REST API interface specification for the Finance Tracker & Budgeting App. Provides user authentication, transaction management, analytics, dashboards, and category summaries.
+servers:
+  - url: /api
+    description: Internal Development Server
+
+tags:
+  - name: Authentication
+    description: User registration, login, and logout endpoints
+  - name: Transactions
+    description: CRUD operations for financial transactions
+  - name: Dashboard
+    description: Endpoints for dashboard listings and summaries
+  - name: Categories
+    description: Endpoints for category analytics and summaries
+  - name: Analytics
+    description: Budget and spending analytics
+
+paths:
+  /auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: {type: string, example: alice}
+                email: {type: string, format: email, example: alice@email.com}
+                password: {type: string, format: password, example: secret}
+              required: [username, email, password]
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Registration error
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login user and retrieve JWT token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: {type: string, example: alice}
+                password: {type: string, format: password, example: secret}
+              required: [username, password]
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Log out current user (invalidate session/JWT on client)
+      responses:
+        '204':
+          description: Logout successful
+
+  /transactions:
+    get:
+      tags: [Transactions]
+      summary: List all user transactions (optionally paginated)
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, default: 20}
+        - in: query
+          name: offset
+          schema: {type: integer, default: 0}
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of transactions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactions:
+                    type: array
+                    items: {$ref: '#/components/schemas/Transaction'}
+                  total: {type: integer}
+    post:
+      tags: [Transactions]
+      summary: Create new user transaction
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionCreate'
+      responses:
+        '201':
+          description: Transaction created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+
+  /transactions/{transaction_id}:
+    get:
+      tags: [Transactions]
+      summary: Retrieve a single transaction by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: transaction_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Transaction details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '404':
+          description: Not found
+    put:
+      tags: [Transactions]
+      summary: Update a transaction (full update)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: transaction_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionUpdate'
+      responses:
+        '200':
+          description: Transaction updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+    patch:
+      tags: [Transactions]
+      summary: Update a transaction (partial update)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: transaction_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionPartialUpdate'
+      responses:
+        '200':
+          description: Transaction updated (partial)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+    delete:
+      tags: [Transactions]
+      summary: Delete a transaction by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: transaction_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '204':
+          description: Transaction deleted
+
+  /dashboard/recent:
+    get:
+      tags: [Dashboard]
+      summary: Retrieve list of the most recent transactions for display on the dashboard
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: count
+          in: query
+          required: false
+          schema: {type: integer, default: 5}
+      responses:
+        '200':
+          description: Recent transactions list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recent:
+                    type: array
+                    items: {$ref: '#/components/schemas/Transaction'}
+
+  /categories/summary:
+    get:
+      tags: [Categories]
+      summary: Retrieve spending amounts per category
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Spending totals by category
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  categories:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        category: {type: string}
+                        total_spent: {type: number, format: float}
+
+  /analytics/budget:
+    get:
+      tags: [Analytics]
+      summary: Get analytics on budget vs. spending (current month)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Budget analytics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetAnalytics'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    AuthResponse:
+      type: object
+      properties:
+        access_token: {type: string, description: "JWT token"}
+        token_type: {type: string, example: "bearer"}
+        user_id: {type: string}
+    Transaction:
+      type: object
+      properties:
+        id: {type: string}
+        user_id: {type: string}
+        amount: {type: number, format: float}
+        currency: {type: string, example: "USD"}
+        category: {type: string, example: "Food"}
+        type: {type: string, enum: ["income", "expense"]}
+        date: {type: string, format: date-time}
+        description: {type: string}
+    TransactionCreate:
+      type: object
+      required: [amount, currency, category, date, type]
+      properties:
+        amount: {type: number, format: float}
+        currency: {type: string, example: "USD"}
+        category: {type: string, example: "Food"}
+        type: {type: string, enum: ["income", "expense"]}
+        date: {type: string, format: date-time}
+        description: {type: string}
+    TransactionUpdate:
+      allOf:
+        - $ref: '#/components/schemas/TransactionCreate'
+        - type: object
+          properties:
+            description: {type: string}
+    TransactionPartialUpdate:
+      type: object
+      properties:
+        amount: {type: number, format: float}
+        currency: {type: string}
+        category: {type: string}
+        type: {type: string, enum: ["income", "expense"]}
+        date: {type: string, format: date-time}
+        description: {type: string}
+    BudgetAnalytics:
+      type: object
+      properties:
+        budgeted: {type: number, format: float}
+        spent: {type: number, format: float}
+        remaining: {type: number, format: float}
+        category_breakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              category: {type: string}
+              spent: {type: number, format: float}
+              budgeted: {type: number, format: float}
