@@ -19,10 +19,26 @@ def create_app():
     )
 
     # CORS - allow all for local development, restrict for prod
-    # CORS - allow all for local development, restrict for prod
+    # CORS - comprehensive setup for Flutter/web (local dev + mobile emulator + cloud preview)
+    # Add more origins here if needed (e.g., real prod, preview URLs)
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://10.0.2.2:3000",           # Android emulator
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        # Allow Kavia Cloud Preview and any additional dynamic cloud origins
+        "https://vscode-internal-4816-beta.beta01.cloud.kavia.ai:3001",
+        # Optionally support everything during early dev (remove * for production security)
+        # "*",
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Accept change this to the frontend's URL in production
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
