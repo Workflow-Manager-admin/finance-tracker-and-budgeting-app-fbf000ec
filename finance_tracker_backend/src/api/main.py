@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from .auth import router as auth_router
 from .transactions import router as transactions_router
+from .db import init_db
 
 app = FastAPI(
     title="Finance Tracker & Budgeting App API",
@@ -17,6 +17,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Database (auto-migrate/init tables) on startup
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 # Register authentication and transaction routes
 app.include_router(auth_router)

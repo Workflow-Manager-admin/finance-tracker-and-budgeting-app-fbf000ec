@@ -2,17 +2,17 @@
 Transaction and analytics endpoints for the Finance Tracker backend.
 Implements all REST endpoints for transactions, dashboard, categories, and analytics,
 per the OpenAPI spec and Markdown API documentation.
-
-In-memory database is used for demonstration purposes.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from datetime import datetime, timezone
-import uuid
 
 from .auth import get_current_user, User
+from .db import TransactionORM, get_db
+
+from sqlalchemy.orm import Session
 
 router = APIRouter(tags=["Transactions", "Dashboard", "Categories", "Analytics"])
 
@@ -41,9 +41,15 @@ class TransactionPartialUpdate(BaseModel):
     date: Optional[datetime]
     description: Optional[str]
 
-class Transaction(TransactionBase):
+class Transaction(BaseModel):
     id: str = Field(..., description="Transaction ID")
     user_id: str = Field(..., description="User ID transaction belongs to")
+    amount: float
+    currency: str
+    category: str
+    type: str
+    date: datetime
+    description: Optional[str] = None
 
 class TransactionListResponse(BaseModel):
     transactions: List[Transaction]
@@ -70,10 +76,7 @@ class BudgetAnalyticsResponse(BaseModel):
 class DashboardRecentResponse(BaseModel):
     recent: List[Transaction]
 
-
-# === In-memory "database" ===
-
-fake_transactions_db: Dict[str, List[Transaction]] = {}  # user_id: [Transaction]
+# Budget config (move to DB/config in prod)
 category_budgets = {
     # Example per-category budget
     "Food": 200,
@@ -84,30 +87,20 @@ category_budgets = {
 }
 DEFAULT_TOTAL_BUDGET = 500
 
-def get_transactions_for_user(user_id: str) -> List[Transaction]:
-    return fake_transactions_db.get(user_id, [])
+# ORM<->Pydantic conversions
 
-def save_transaction_for_user(user_id: str, transaction: Transaction):
-    fake_transactions_db.setdefault(user_id, []).append(transaction)
-
-def remove_transaction_for_user(user_id: str, transaction_id: str) -> bool:
-    txs = fake_transactions_db.get(user_id, [])
-    before = len(txs)
-    fake_transactions_db[user_id] = [t for t in txs if t.id != transaction_id]
-    return len(fake_transactions_db[user_id]) < before
-
-def get_transaction_by_id(user_id: str, tx_id: str) -> Optional[Transaction]:
-    return next((t for t in fake_transactions_db.get(user_id, []) if t.id == tx_id), None)
-
-def update_transaction(user_id: str, tx_id: str, tx_data: Dict[str, Any], patch: bool = False) -> Optional[Transaction]:
-    tx = get_transaction_by_id(user_id, tx_id)
-    if not tx:
-        return None
-    update_fields = tx_data if patch else {**tx_data}
-    for field, value in update_fields.items():
-        if value is not None:
-            setattr(tx, field, value)
-    return tx
+def orm_to_transaction(tx: TransactionORM) -> Transaction:
+    # Convert TransactionORM to Pydantic Transaction
+    return Transaction(
+        id=tx.id,
+        user_id=tx.user_id,
+        amount=tx.amount,
+        currency=tx.currency,
+        category=tx.category,
+        type=tx.type,
+        date=tx.date,
+        description=tx.description,
+    )
 
 # === Transaction Endpoints ===
 
@@ -121,12 +114,15 @@ def update_transaction(user_id: str, tx_id: str, tx_data: Dict[str, Any], patch:
 async def list_transactions(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     user_id = current_user.user_id
-    txs = get_transactions_for_user(user_id)
-    paged = txs[offset:offset+limit]
-    return TransactionListResponse(transactions=paged, total=len(txs))
+    txs_query = db.query(TransactionORM).filter(TransactionORM.user_id == user_id).order_by(TransactionORM.date.desc())
+    total = txs_query.count()
+    paged = txs_query.offset(offset).limit(limit).all()
+    result = [orm_to_transaction(t) for t in paged]
+    return TransactionListResponse(transactions=result, total=total)
 
 
 # PUBLIC_INTERFACE
@@ -139,13 +135,23 @@ async def list_transactions(
 )
 async def create_transaction(
     tx_create: TransactionCreate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     user_id = current_user.user_id
-    tx_id = str(uuid.uuid4())
-    tx = Transaction(id=tx_id, user_id=user_id, **tx_create.dict())
-    save_transaction_for_user(user_id, tx)
-    return tx
+    tx_orm = TransactionORM(
+        user_id=user_id,
+        amount=tx_create.amount,
+        currency=tx_create.currency,
+        category=tx_create.category,
+        type=tx_create.type,
+        date=tx_create.date,
+        description=tx_create.description,
+    )
+    db.add(tx_orm)
+    db.commit()
+    db.refresh(tx_orm)
+    return orm_to_transaction(tx_orm)
 
 # PUBLIC_INTERFACE
 @router.get(
@@ -156,12 +162,13 @@ async def create_transaction(
 )
 async def get_transaction(
     transaction_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    tx = get_transaction_by_id(current_user.user_id, transaction_id)
-    if tx is None:
+    tx_orm = db.query(TransactionORM).filter(TransactionORM.id == transaction_id, TransactionORM.user_id == current_user.user_id).first()
+    if tx_orm is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    return tx
+    return orm_to_transaction(tx_orm)
 
 # PUBLIC_INTERFACE
 @router.put(
@@ -173,15 +180,17 @@ async def get_transaction(
 async def update_transaction_put(
     transaction_id: str,
     tx_update: TransactionUpdate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    tx = get_transaction_by_id(current_user.user_id, transaction_id)
-    if tx is None:
+    tx_orm = db.query(TransactionORM).filter(TransactionORM.id == transaction_id, TransactionORM.user_id == current_user.user_id).first()
+    if tx_orm is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    newdata = tx_update.dict()
-    for field, val in newdata.items():
-        setattr(tx, field, val)
-    return tx
+    for field, val in tx_update.dict().items():
+        setattr(tx_orm, field, val)
+    db.commit()
+    db.refresh(tx_orm)
+    return orm_to_transaction(tx_orm)
 
 # PUBLIC_INTERFACE
 @router.patch(
@@ -193,15 +202,18 @@ async def update_transaction_put(
 async def update_transaction_patch(
     transaction_id: str,
     tx_pupdate: TransactionPartialUpdate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    tx = get_transaction_by_id(current_user.user_id, transaction_id)
-    if tx is None:
+    tx_orm = db.query(TransactionORM).filter(TransactionORM.id == transaction_id, TransactionORM.user_id == current_user.user_id).first()
+    if tx_orm is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
     update_data = tx_pupdate.dict(exclude_unset=True)
     for field, val in update_data.items():
-        setattr(tx, field, val)
-    return tx
+        setattr(tx_orm, field, val)
+    db.commit()
+    db.refresh(tx_orm)
+    return orm_to_transaction(tx_orm)
 
 # PUBLIC_INTERFACE
 @router.delete(
@@ -212,12 +224,14 @@ async def update_transaction_patch(
 )
 async def delete_transaction(
     transaction_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    success = remove_transaction_for_user(current_user.user_id, transaction_id)
-    if not success:
+    tx_orm = db.query(TransactionORM).filter(TransactionORM.id == transaction_id, TransactionORM.user_id == current_user.user_id).first()
+    if tx_orm is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    # 204 No Content
+    db.delete(tx_orm)
+    db.commit()
     return
 
 # === Dashboard Endpoint ===
@@ -231,10 +245,12 @@ async def delete_transaction(
 )
 async def dashboard_recent(
     count: int = Query(5, ge=1, le=20),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    txs = sorted(get_transactions_for_user(current_user.user_id), key=lambda t: t.date, reverse=True)
-    return DashboardRecentResponse(recent=txs[:count])
+    txs = db.query(TransactionORM).filter(TransactionORM.user_id == current_user.user_id).order_by(TransactionORM.date.desc()).limit(count).all()
+    result = [orm_to_transaction(tx) for tx in txs]
+    return DashboardRecentResponse(recent=result)
 
 # === Categories Summary Endpoint ===
 
@@ -246,14 +262,14 @@ async def dashboard_recent(
     description="Returns total spent grouped by category for the current user."
 )
 async def categories_summary(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     user_id = current_user.user_id
-    txs = get_transactions_for_user(user_id)
+    # Only count 'expense' transactions
+    txs = db.query(TransactionORM).filter(TransactionORM.user_id == user_id, TransactionORM.type == "expense").all()
     category_map: Dict[str, float] = {}
     for tx in txs:
-        if tx.type != "expense":
-            continue
         category_map[tx.category] = category_map.get(tx.category, 0) + tx.amount
     result = [
         CategorySummaryItem(category=cat, total_spent=amount)
@@ -272,16 +288,18 @@ async def categories_summary(
 )
 async def analytics_budget(
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     user_id = current_user.user_id
     now = datetime.now(timezone.utc)
-    txs = get_transactions_for_user(user_id)
-    # Filter to current month:
+    # Only expenses in current month
+    txs = db.query(TransactionORM).filter(
+        TransactionORM.user_id == user_id,
+        TransactionORM.type == "expense"
+    ).all()
     month_txs = [
         tx for tx in txs
-        if tx.type == "expense"
-        and tx.date.year == now.year
-        and tx.date.month == now.month
+        if tx.date.year == now.year and tx.date.month == now.month
     ]
     total_budgeted = float(sum(category_budgets.values())) if category_budgets else DEFAULT_TOTAL_BUDGET
 
