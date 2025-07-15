@@ -19,12 +19,15 @@ def create_app():
     )
 
     # CORS - allow all for local development, restrict for prod
+    # CORS - allow all for local development, restrict for prod
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=["*"],  # Accept change this to the frontend's URL in production
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],  # Expose all headers so the frontend can read tokens if provided
+        max_age=600,
     )
 
     # Init DB on startup (if required)

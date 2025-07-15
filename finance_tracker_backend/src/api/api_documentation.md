@@ -1,5 +1,11 @@
 # Finance Tracker & Budgeting App: REST API Documentation
 
+**CORS & Connectivity Note:** If your client receives "connection refused" or CORS error, ensure:
+- Backend FastAPI service is running and reachable at the configured base URL.
+- The frontend uses the correct base URL (including port—default is 8000 if running locally, or as deployed).
+- CORS middleware is enabled to allow your frontend's origin. For debugging, all origins are accepted.
+- Backend `/` endpoint (health check) responds with 200 OK if the service is up.
+
 This document provides a human-readable summary of all REST API endpoints offered by the backend. For full technical details, see `openapi.yaml`.
 
 ---
